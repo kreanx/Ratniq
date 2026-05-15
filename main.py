@@ -11,14 +11,14 @@ from gi.repository import GLib
 from layeroverlay import LayerOverlay
 from sprite import SpriteSet, VARIANTS
 from rat import Rat, Surface
-from window_detector import get_walkable_surfaces
+from window_detector import get_walkable_surfaces, start_background_scan
 
 log = logging.getLogger(__name__)
 
 FPS = 30
 FRAME_DT = 1.0 / FPS
 SPRITE_SCALE = 3
-WINDOW_SCAN_INTERVAL = 3.0
+WINDOW_SCAN_INTERVAL = 0.1
 DOCK_HEIGHT = 0
 RAT_COUNT = 3
 
@@ -49,12 +49,13 @@ class RatniqApp:
             self.rats.append(rat)
 
         self._last_time = time.time()
-        self._window_scan_timer = 0.0
         self._screen_w = sw
         self._screen_h = sh
+        self._sprite_h = sprite_h
         self._running = True
         self._loop = GLib.MainLoop()
 
+        start_background_scan(sw, sh, WINDOW_SCAN_INTERVAL)
         self._scan_windows()
 
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self._quit)
@@ -75,6 +76,10 @@ class RatniqApp:
         else:
             rat.x = random.uniform(sprite_w, sw - sprite_w)
             rat._target_x = random.uniform(sprite_w, sw - sprite_w)
+            if rat._target_x > rat.x:
+                rat.direction = rat.direction.RIGHT
+            else:
+                rat.direction = rat.direction.LEFT
         rat.y = ground_y
 
     def _quit(self, *args):
@@ -88,10 +93,20 @@ class RatniqApp:
         surfaces_raw = get_walkable_surfaces(self._screen_w, self._screen_h)
         surfaces = []
         for s in surfaces_raw:
-            if s["type"] == "window_top":
-                surfaces.append(
-                    Surface(s["y"], s["x_start"], s["x_end"], "window_top")
-                )
+            if s["type"] != "window_top":
+                continue
+            if s["y"] < 50:
+                continue
+            if s["x_start"] < -10:
+                continue
+            x_start = max(0, s["x_start"])
+            x_end = min(self._screen_w, s["x_end"])
+            if x_end - x_start < 100:
+                continue
+            y = s["y"] - self._sprite_h
+            if y < 10:
+                continue
+            surfaces.append(Surface(y, x_start, x_end, "window_top"))
         for rat in self.rats:
             rat.update_surfaces(surfaces)
 
@@ -103,10 +118,7 @@ class RatniqApp:
         dt = min(now - self._last_time, 0.1)
         self._last_time = now
 
-        self._window_scan_timer += dt
-        if self._window_scan_timer >= WINDOW_SCAN_INTERVAL:
-            self._window_scan_timer = 0.0
-            self._scan_windows()
+        self._scan_windows()
 
         rat_data = []
         for i, rat in enumerate(self.rats):

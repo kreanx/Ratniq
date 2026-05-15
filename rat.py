@@ -9,9 +9,8 @@ class RatState(enum.Enum):
     SIT = "sit"
     WALK = "walk"
     RUN = "run"
-    JUMP = "jump"
-    FALL = "fall"
     CLIMB = "climb"
+    FALL = "fall"
 
 
 class RatDirection(enum.Enum):
@@ -24,9 +23,8 @@ FRAME_COUNTS = {
     RatState.SIT: 10,
     RatState.WALK: 10,
     RatState.RUN: 12,
-    RatState.JUMP: 10,
-    RatState.FALL: 10,
     RatState.CLIMB: 10,
+    RatState.FALL: 10,
 }
 
 
@@ -50,9 +48,21 @@ class Surface:
     def overlaps_x(self, other):
         return self.x_start < other.x_end and other.x_start < self.x_end
 
+    def overlap_range(self, other):
+        lo = max(self.x_start, other.x_start)
+        hi = min(self.x_end, other.x_end)
+        return lo, hi
+
     @property
     def width(self):
         return self.x_end - self.x_start
+
+    def _distance_to(self, other):
+        return (
+            abs(self.y - other.y)
+            + abs(self.x_start - other.x_start)
+            + abs(self.x_end - other.x_end)
+        )
 
 
 class Rat:
@@ -70,24 +80,23 @@ class Rat:
         self.frame_timer = 0.0
         self.frame_interval = 0.1
 
-        self.walk_speed = 120.0
-        self.run_speed = 280.0
-        self.jump_speed_x = 200.0
-        self.jump_speed_y = 350.0
-        self.climb_speed = 150.0
-        self.gravity = 600.0
+        self.walk_speed = 100.0
+        self.run_speed = 250.0
+        self.climb_speed = 2000.0
+        self.fall_speed = 400.0
 
         self.state_timer = 0.0
         self.state_duration = random.uniform(1.0, 3.0)
         self.paused = False
 
         self._target_x = None
-        self._target_y = None
         self._surfaces = []
         self._current_surface = None
 
-        self._vel_x = 0.0
-        self._vel_y = 0.0
+        self._transition_target = None
+        self._transition_x = None
+        self._fall_vel = 0.0
+        self._pending_climb = False
 
         ground = Surface(screen_h - sprite_h, 0, screen_w, "screen_bottom")
         self._surfaces = [ground]
@@ -101,48 +110,88 @@ class Rat:
             self.screen_h - self.sprite_h, 0, self.screen_w, "screen_bottom"
         )
         self._surfaces = [ground] + window_surfaces
-        if self._current_surface not in self._surfaces:
+
+        if self._current_surface is not None:
+            matched = self._find_closest(self._current_surface)
+            if matched is not None:
+                old = self._current_surface
+                dy = matched.y - old.y
+                dx_start = matched.x_start - old.x_start
+                if self.state not in (RatState.CLIMB, RatState.FALL):
+                    self.y += dy
+                self.x += dx_start
+                self._current_surface = matched
+                if self._target_x is not None and self.state in (RatState.WALK, RatState.RUN):
+                    self._target_x += dx_start
+                if self.state not in (RatState.CLIMB, RatState.FALL):
+                    self.y = matched.y
+            elif self._current_surface.surface_type == "window_top":
+                if self.state not in (RatState.CLIMB, RatState.FALL):
+                    self._transition_target = ground
+                    self._target_y = ground.y
+                    self._fall_vel = 0.0
+                    self._change_state(RatState.FALL)
+
+        if self._transition_target is not None:
+            matched = self._find_closest(self._transition_target)
+            if matched is not None:
+                self._transition_target = matched
+                if hasattr(self, "_target_y"):
+                    self._target_y = matched.y
+            else:
+                self._transition_target = None
+                if self.state in (RatState.CLIMB, RatState.FALL):
+                    if self._current_surface:
+                        self.y = self._current_surface.y
+                    self._change_state(RatState.WALK)
+
+        if self._current_surface is None:
             self._current_surface = ground
             self.y = ground.y
 
-    def _find_jump_target(self):
-        if not self._surfaces or len(self._surfaces) < 2:
+        self._clamp_to_surface()
+
+    def _find_closest(self, old_surface):
+        if old_surface.surface_type == "screen_bottom":
+            for s in self._surfaces:
+                if s.surface_type == "screen_bottom":
+                    return s
             return None
 
-        window_surfs = [
-            s for s in self._surfaces
-            if s.surface_type == "window_top" and s is not self._current_surface
-        ]
-        if not window_surfs:
-            return None
-
-        reachable = []
-        for s in window_surfs:
-            dy = s.y - self.y
-            if dy > 0:
+        best = None
+        best_score = float("inf")
+        for s in self._surfaces:
+            if s.surface_type != old_surface.surface_type:
                 continue
-            cx = (s.x_start + s.x_end) / 2
-            dx = abs(cx - self.x)
-            dist = math.sqrt(dx * dx + dy * dy)
-            if dist < 800:
-                reachable.append((s, dist))
+            width_diff = abs(s.width - old_surface.width)
+            pos_dist = abs(s.x_start - old_surface.x_start) + abs(s.y - old_surface.y)
+            if width_diff < 20:
+                score = pos_dist
+            elif width_diff < 100:
+                score = pos_dist + width_diff * 5
+            else:
+                score = pos_dist + width_diff * 20
+            if score < best_score:
+                best_score = score
+                best = s
+        if best is not None and best_score < 10000:
+            return best
+        return None
 
-        if not reachable:
-            return None
+    def _clamp_to_surface(self):
+        if self._current_surface is None:
+            return
+        s = self._current_surface
+        self.x = max(s.x_start, min(self.x, s.x_end - self.sprite_w))
 
-        reachable.sort(key=lambda t: t[1])
-        return reachable[0][0]
-
-    def _pick_new_target(self):
+    def _pick_walk_target(self):
         if self._current_surface:
             margin = self.sprite_w
             self._target_x = self._current_surface.random_x(margin)
         else:
-            margin = self.sprite_w
-            self._target_x = random.uniform(margin, self.screen_w - margin)
-        self._target_y = None
+            self._target_x = random.uniform(self.sprite_w, self.screen_w - self.sprite_w)
 
-    def _change_state(self, new_state):
+    def _change_state(self, new_state, keep_target=False):
         self.state = new_state
         self.frame_index = 0
         self.frame_timer = 0.0
@@ -155,54 +204,49 @@ class Rat:
             self.state_duration = random.uniform(2.0, 5.0)
             self.frame_interval = 0.2
         elif new_state == RatState.WALK:
-            self.state_duration = random.uniform(4.0, 12.0)
-            self._pick_new_target()
+            self.state_duration = random.uniform(3.0, 10.0)
+            if not keep_target:
+                self._pick_walk_target()
             self.frame_interval = 0.1
         elif new_state == RatState.RUN:
             self.state_duration = random.uniform(1.0, 3.0)
-            self._pick_new_target()
+            if not keep_target:
+                self._pick_walk_target()
             self.frame_interval = 0.06
-        elif new_state == RatState.JUMP:
-            self.frame_interval = 0.08
-            self._start_jump()
-        elif new_state == RatState.FALL:
-            self.frame_interval = 0.08
         elif new_state == RatState.CLIMB:
             self.frame_interval = 0.08
+            self.state_duration = 15.0
+        elif new_state == RatState.FALL:
+            self.frame_interval = 0.08
+            self._fall_vel = 0.0
             self.state_duration = 10.0
 
-    def _start_jump(self):
-        target = self._find_jump_target()
-        if target is None:
-            self._change_state(RatState.WALK)
-            return
+    def _find_transition_target(self):
+        if not self._current_surface or len(self._surfaces) < 2:
+            return None, None
 
-        self._target_x = random.uniform(
-            target.x_start + self.sprite_w, target.x_end - self.sprite_w
-        )
-        self._target_y = target.y - self.sprite_h
+        candidates = []
+        for s in self._surfaces:
+            if s is self._current_surface:
+                continue
 
-        dx = self._target_x - self.x
-        dy = self._target_y - self.y
+            if s.overlaps_x(self._current_surface):
+                overlap_lo, overlap_hi = s.overlap_range(self._current_surface)
+                overlap_lo += self.sprite_w
+                overlap_hi -= self.sprite_w
+                if overlap_lo < overlap_hi:
+                    x = random.uniform(overlap_lo, overlap_hi)
+                    candidates.append((s, x))
 
-        t = math.sqrt(abs(dy) * 2 / self.gravity) if dy < 0 else 0.3
-        t = max(t, 0.3)
-        t = min(t, 1.0)
+        if not candidates:
+            return None, None
 
-        self._vel_x = dx / t
-        self._vel_y = dy / t - 0.5 * self.gravity * t
-
-        if dx > 0:
-            self.direction = RatDirection.RIGHT
-        elif dx < 0:
-            self.direction = RatDirection.LEFT
-
-        self.state_duration = t + 0.5
-        self._current_surface = None
+        random.shuffle(candidates)
+        return candidates[0]
 
     def _decide_next_state(self):
         hour = time.localtime().tm_hour
-        if 1 <= hour <= 4 and random.random() < 0.4:
+        if 1 <= hour <= 4 and random.random() < 0.3:
             self._change_state(RatState.RUN)
             return
 
@@ -211,17 +255,28 @@ class Rat:
             s for s in self._surfaces if s.surface_type == "window_top"
         ]
 
-        if (window_surfs and roll < 0.20
-                and self.state not in (RatState.JUMP, RatState.FALL)):
-            self._change_state(RatState.JUMP)
-        elif roll < 0.45:
+        if (window_surfs and roll < 0.30
+                and self.state not in (RatState.CLIMB, RatState.FALL)):
+            self._try_transition()
+        elif roll < 0.50:
             self._change_state(RatState.WALK)
-        elif roll < 0.60:
+        elif roll < 0.65:
             self._change_state(RatState.SIT)
-        elif roll < 0.75:
+        elif roll < 0.80:
             self._change_state(RatState.IDLE)
         else:
             self._change_state(RatState.WALK)
+
+    def _try_transition(self):
+        target, x = self._find_transition_target()
+        if target is None:
+            self._change_state(RatState.WALK)
+            return
+
+        self._transition_target = target
+        self._transition_x = x
+        self._target_x = x
+        self._change_state(RatState.WALK, keep_target=True)
 
     def update(self, dt):
         if self.paused:
@@ -232,25 +287,25 @@ class Rat:
 
         if self.frame_timer >= self.frame_interval:
             self.frame_timer -= self.frame_interval
-            count = FRAME_COUNTS.get(self.state, 6)
+            count = FRAME_COUNTS.get(self.state, 10)
             self.frame_index = (self.frame_index + 1) % count
 
         if self.state == RatState.WALK:
-            self._move_toward_target(dt, self.walk_speed)
+            self._do_walk(dt, self.walk_speed)
         elif self.state == RatState.RUN:
-            self._move_toward_target(dt, self.run_speed)
-        elif self.state == RatState.JUMP:
-            self._move_jump(dt)
-        elif self.state == RatState.FALL:
-            self._move_fall(dt)
+            self._do_walk(dt, self.run_speed)
         elif self.state == RatState.CLIMB:
-            self._move_climb(dt)
+            self._do_climb(dt)
+        elif self.state == RatState.FALL:
+            self._do_fall(dt)
 
-        if (self.state not in (RatState.JUMP, RatState.FALL)
-                and self.state_timer >= self.state_duration):
+        if (self.state not in (RatState.CLIMB, RatState.FALL)
+                and self.state_timer >= self.state_duration
+                and not self._pending_climb
+                and self._transition_target is None):
             self._decide_next_state()
 
-    def _move_toward_target(self, dt, speed):
+    def _do_walk(self, dt, speed):
         if self._target_x is None:
             return
 
@@ -260,6 +315,18 @@ class Rat:
         dx = self._target_x - self.x
         if abs(dx) < speed * dt:
             self.x = self._target_x
+
+            if getattr(self, "_pending_climb", False):
+                self._pending_climb = False
+                if self._transition_target is not None:
+                    dy = self._transition_target.y - self.y
+                    self._start_vertical(self._transition_target, dy)
+                return
+
+            if self._transition_target is not None:
+                self._begin_surface_transition()
+                return
+
             self._decide_next_state()
             return
 
@@ -276,44 +343,78 @@ class Rat:
                 min(self.x, self._current_surface.x_end - self.sprite_w),
             )
 
-    def _move_jump(self, dt):
-        self._vel_y += self.gravity * dt
-        self.x += self._vel_x * dt
-        self.y += self._vel_y * dt
+    def _begin_surface_transition(self):
+        target = self._transition_target
+        self._transition_target = None
 
-        landed = self._check_landing()
-        if landed:
+        dy = target.y - self.y
+        if abs(dy) < 2:
+            self._current_surface = target
+            self.y = target.y
+            self._change_state(RatState.WALK)
             return
 
-        if self.state_timer >= self.state_duration:
+        edge_x = self._nearest_edge_x(target)
+        if abs(edge_x - self.x) > self.sprite_w * 0.5:
+            self._transition_target = target
+            self._target_x = edge_x
+            self._pending_climb = True
+            self._change_state(RatState.WALK, keep_target=True)
+            return
+
+        self._start_vertical(target, dy)
+
+    def _nearest_edge_x(self, target):
+        cx = self.x + self.sprite_w / 2
+        left_edge = target.x_start
+        right_edge = target.x_end - self.sprite_w
+        if right_edge < left_edge:
+            return left_edge
+        return left_edge if abs(cx - left_edge) <= abs(cx - right_edge) else right_edge
+
+    def _start_vertical(self, target, dy):
+        self._transition_target = target
+        self._target_x = self.x
+        self._target_y = target.y
+        if dy < 0:
+            self._change_state(RatState.CLIMB)
+        else:
             self._change_state(RatState.FALL)
 
-    def _move_fall(self, dt):
-        self._vel_y += self.gravity * dt
-        self.x += self._vel_x * dt
-        self.y += self._vel_y * dt
-        self._check_landing()
+    def _do_climb(self, dt):
+        target = self._transition_target
+        if target is None:
+            self._change_state(RatState.WALK)
+            return
 
-    def _check_landing(self):
-        for surf in self._surfaces:
-            if not surf.overlaps_x(Surface(0, self.x, self.x + self.sprite_w)):
-                continue
+        dy = target.y - self.y
+        if abs(dy) < self.climb_speed * dt:
+            self.y = target.y
+            self._current_surface = target
+            self._transition_target = None
+            self._change_state(RatState.WALK)
+            return
 
-            if (self._vel_y >= 0
-                    and self.y + self.sprite_h >= surf.y
-                    and self.y + self.sprite_h <= surf.y + self.sprite_h * 0.5):
-                self.y = surf.y
-                self._current_surface = surf
-                self._vel_x = 0.0
-                self._vel_y = 0.0
-                self._change_state(RatState.WALK)
-                return True
+        self.y += math.copysign(self.climb_speed * dt, dy)
+
+    def _do_fall(self, dt):
+        target = self._transition_target
+        if target is None:
+            self._change_state(RatState.WALK)
+            return
+
+        self._fall_vel += 3000.0 * dt
+        self.y += self._fall_vel * dt
+
+        if self.y >= target.y:
+            self.y = target.y
+            self._current_surface = target
+            self._transition_target = None
+            self._fall_vel = 0.0
+            self._change_state(RatState.WALK)
 
         if self.y > self.screen_h + self.sprite_h:
             self._respawn()
-            return True
-
-        return False
 
     def _respawn(self):
         ground = None
@@ -338,47 +439,9 @@ class Rat:
             self.x = self.screen_w + self.sprite_w
             self.direction = RatDirection.LEFT
 
-        self._vel_x = 0.0
-        self._vel_y = 0.0
+        self._transition_target = None
+        self._fall_vel = 0.0
         self._change_state(RatState.WALK)
-
-    def _move_climb(self, dt):
-        if self._target_x is None or self._target_y is None:
-            self._change_state(RatState.WALK)
-            return
-
-        dx = self._target_x - self.x
-        dy = self._target_y - self.y
-        dist = math.sqrt(dx * dx + dy * dy)
-
-        if dist < self.climb_speed * dt:
-            self.x = self._target_x
-            self.y = self._target_y
-
-            for surf in self._surfaces:
-                if (surf.surface_type == "window_top"
-                        and abs(surf.y - self.sprite_h - self.y) < 5):
-                    self._current_surface = surf
-                    break
-            else:
-                if self._surfaces:
-                    self._current_surface = self._surfaces[0]
-                    self.y = self._current_surface.y
-                else:
-                    self._current_surface = None
-
-            self._change_state(RatState.WALK)
-            return
-
-        if dx > 0:
-            self.direction = RatDirection.RIGHT
-        elif dx < 0:
-            self.direction = RatDirection.LEFT
-
-        ratio_x = dx / dist if dist > 0 else 0
-        ratio_y = dy / dist if dist > 0 else 0
-        self.x += ratio_x * self.climb_speed * dt
-        self.y += ratio_y * self.climb_speed * dt
 
     def toggle_pause(self):
         self.paused = not self.paused

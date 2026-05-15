@@ -3,90 +3,88 @@ import random
 import subprocess
 import json
 import os
+import threading
 
 log = logging.getLogger(__name__)
 
-DETECTOR_BIN = os.path.join(os.path.dirname(__file__), "tools", "detect_v2-bin")
+DETECTOR_BIN = os.path.join(os.path.dirname(__file__), "tools", "detect_daemon-bin")
+DETECTOR_V2_BIN = os.path.join(os.path.dirname(__file__), "tools", "detect_v2-bin")
+
+_latest_surfaces = []
+_lock = threading.Lock()
+_scanner_thread = None
 
 
 def get_walkable_surfaces(screen_w, screen_h):
-    rects = _try_cosmic_detector()
-    if rects:
-        return rects
-
-    rects = _try_x11()
-    if rects:
-        return rects
-
-    return _generate_virtual_windows(screen_w, screen_h)
-
-
-def _try_cosmic_detector():
-    if not os.path.isfile(DETECTOR_BIN):
-        return []
-    try:
-        r = subprocess.run(
-            [DETECTOR_BIN], capture_output=True, text=True, timeout=3,
-        )
-        if r.returncode == 0 and r.stdout.strip():
-            rects = json.loads(r.stdout)
-            if rects:
-                log.debug("COSMIC detector: %d windows", len(rects))
-                return rects
-    except Exception:
-        pass
+    with _lock:
+        if _latest_surfaces:
+            return list(_latest_surfaces)
     return []
 
 
-def _try_x11():
-    rects = []
-    try:
-        from Xlib.display import Display as XDisplay
-
-        d = XDisplay()
-        root = d.screen().root
-        children = root.query_tree().children
-        net_type = d.intern_atom("_NET_WM_WINDOW_TYPE")
-        for w in children:
-            try:
-                attrs = w.get_attributes()
-                if attrs.map_state != 2:
-                    continue
-                geom = w.get_geometry()
-                if geom.width < 50 or geom.height < 50:
-                    continue
-                wa = w.get_full_property(net_type, 0)
-                if wa and wa.value:
-                    continue
-                rects.append({
-                    "type": "window_top",
-                    "y": geom.y,
-                    "x_start": geom.x,
-                    "x_end": geom.x + geom.width,
-                    "height": geom.height,
-                })
-            except Exception:
-                pass
-        d.close()
-    except Exception:
-        pass
-    return rects
+def start_background_scan(screen_w, screen_h, interval=3.0):
+    global _scanner_thread
+    _scanner_thread = threading.Thread(target=_event_loop, daemon=True)
+    _scanner_thread.start()
+    log.info("Event-driven window scanner started")
 
 
-def _generate_virtual_windows(screen_w, screen_h):
-    windows = []
-    count = random.randint(2, 5)
-    for _ in range(count):
-        w = random.randint(350, min(900, screen_w - 100))
-        h = random.randint(250, min(600, screen_h - 250))
-        x = random.randint(50, max(51, screen_w - w - 50))
-        y = random.randint(80, max(81, screen_h - h - 200))
-        windows.append({
-            "type": "window_top",
-            "y": y,
-            "x_start": x,
-            "x_end": x + w,
-            "height": h,
-        })
-    log.debug("Virtual windows: %d", len(windows))
-    return windows
+def _event_loop():
+    while True:
+        try:
+            _run_daemon()
+        except Exception as e:
+            log.debug("Daemon error: %s, retrying in 2s", e)
+        import time
+        time.sleep(2)
+
+
+def _run_daemon():
+    if not os.path.isfile(DETECTOR_BIN):
+        _fallback_poll()
+        return
+
+    proc = subprocess.Popen(
+        [DETECTOR_BIN],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        bufsize=1,
+    )
+
+    log.info("Daemon started pid=%d", proc.pid)
+
+    for line in iter(proc.stdout.readline, b""):
+        if not line:
+            break
+        try:
+            rects = json.loads(line)
+            if isinstance(rects, list):
+                with _lock:
+                    _latest_surfaces.clear()
+                    _latest_surfaces.extend(rects)
+        except json.JSONDecodeError:
+            pass
+
+    proc.wait()
+    log.info("Daemon exited code=%d", proc.returncode)
+
+
+def _fallback_poll():
+    bin_path = DETECTOR_V2_BIN
+    if not os.path.isfile(bin_path):
+        return
+    while True:
+        try:
+            r = subprocess.run(
+                [bin_path], capture_output=True, text=True, timeout=3,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                rects = json.loads(r.stdout)
+                if rects:
+                    with _lock:
+                        _latest_surfaces.clear()
+                        _latest_surfaces.extend(rects)
+        except Exception:
+            pass
+        import time
+        time.sleep(2)
