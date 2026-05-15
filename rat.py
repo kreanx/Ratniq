@@ -401,6 +401,17 @@ class Rat:
         if crossed or arrived:
             self.x = self._target_x
             self.vel_x = 0.0
+
+            if getattr(self, "_pending_climb", False):
+                self._pending_climb = False
+                if self._transition_target is not None:
+                    self._begin_surface_transition()
+                return
+
+            if self._transition_target is not None:
+                self._begin_surface_transition()
+                return
+
             if self._fleeing:
                 self._fleeing = False
             self._decide_next_state()
@@ -500,6 +511,11 @@ class Rat:
             self._change_state(RatState.WALK)
             return
 
+        cx = self.x + self.sprite_w / 2
+        if target.x_start <= cx <= target.x_end:
+            self._start_jump_to(target)
+            return
+
         edge_x = self._nearest_edge_x(target)
         if abs(edge_x - self.x) > self.sprite_w * 0.5:
             self._transition_target = target
@@ -532,8 +548,12 @@ class Rat:
 
     def _nearest_edge_x(self, target):
         cx = self.x + self.sprite_w / 2
-        left_edge = target.x_start
-        right_edge = target.x_end - self.sprite_w
+        if self._current_surface:
+            left_edge = self._current_surface.x_start
+            right_edge = self._current_surface.x_end - self.sprite_w
+        else:
+            left_edge = target.x_start
+            right_edge = target.x_end - self.sprite_w
         if right_edge < left_edge:
             return left_edge
         return left_edge if abs(cx - left_edge) <= abs(cx - right_edge) else right_edge
