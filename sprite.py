@@ -76,8 +76,8 @@ class SpriteSet:
         right_scaled = _scale_frames(right_frames_raw, self.scale)
         left_scaled = _mirror_frames(right_scaled)
 
-        setattr(self, f"{name}_right", right_scaled)
-        setattr(self, f"{name}_left", left_scaled)
+        setattr(self, f"{name}_left", right_scaled)
+        setattr(self, f"{name}_right", left_scaled)
 
     def get_frame(self, state, direction, frame_index):
         key = f"{state}_{direction}"
