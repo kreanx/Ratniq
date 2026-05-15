@@ -120,9 +120,10 @@ class RatniqApp:
 
         self._scan_windows()
 
+        mx, my = self.overlay.mouse_pos
         rat_data = []
         for i, rat in enumerate(self.rats):
-            rat.update(dt)
+            rat.update(dt, mx, my)
             state_name, dir_name = rat.get_frame_key()
             frame = self.sprites_list[i].get_frame(state_name, dir_name, rat.frame_index)
             rat_data.append((frame, rat.x, rat.y))

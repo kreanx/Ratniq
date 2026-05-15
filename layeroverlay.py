@@ -45,9 +45,17 @@ class LayerOverlay:
         GtkLayerShell.set_keyboard_mode(self._window, GtkLayerShell.KeyboardMode.NONE)
 
         self._window.connect("draw", self._on_draw)
+        self._window.add_events(
+            Gdk.EventMask.POINTER_MOTION_MASK
+            | Gdk.EventMask.ENTER_NOTIFY_MASK
+        )
+        self._window.connect("motion-notify-event", self._on_motion)
+        self._window.connect("enter-notify-event", self._on_motion)
 
         self._rat_entries = []
         self._prev_entries = []
+        self._mouse_x = None
+        self._mouse_y = None
 
         self._window.show_all()
 
@@ -99,6 +107,15 @@ class LayerOverlay:
         if key not in self._pixmap_cache:
             self._pixmap_cache[key] = self._pil_to_cairo_surface(pil_image)
         return self._pixmap_cache[key][0]
+
+    def _on_motion(self, widget, event):
+        self._mouse_x = event.x
+        self._mouse_y = event.y
+        return False
+
+    @property
+    def mouse_pos(self):
+        return self._mouse_x, self._mouse_y
 
     def _on_draw(self, widget, cr):
         cr.set_source_rgba(0, 0, 0, 0)
