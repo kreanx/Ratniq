@@ -1,26 +1,30 @@
 import os
+import colorsys
 from PIL import Image
 
-SPRITE_SHEET = os.path.join(os.path.dirname(__file__), "assets", "sprites", "rat_bat_spritesheet.png")
-RUNNING_SHEET = os.path.join(os.path.dirname(__file__), "assets", "sprites", "running_rat_strip.png")
+SPRITE_DIR = os.path.join(os.path.dirname(__file__), "assets", "sprites", "generated")
+FALLBACK_DIR = os.path.join(os.path.dirname(__file__), "assets", "sprites")
 CELL_SIZE = 32
 
-RAT_IDLE_ROW = 0
-RAT_WALK_ROW = 2
-RAT_GESTURE_ROW = 1
-RAT_FRAMES = 10
-
+RUNNING_SHEET = os.path.join(FALLBACK_DIR, "running_rat_strip.png")
 RUN_FRAME_COUNT = 4
 RUN_FRAME_W = 64
 RUN_FRAME_H = 64
 
+SPRITE_DEFS = {
+    "idle": 4,
+    "walk": 6,
+    "jump": 4,
+    "fall": 4,
+    "climb": 4,
+    "sit": 3,
+}
 
-def _crop_row(img, row, count):
+
+def _crop_strip(img, frame_count):
     frames = []
-    for col in range(count):
-        x0 = col * CELL_SIZE
-        y0 = row * CELL_SIZE
-        frame = img.crop((x0, y0, x0 + CELL_SIZE, y0 + CELL_SIZE))
+    for i in range(frame_count):
+        frame = img.crop((i * CELL_SIZE, 0, (i + 1) * CELL_SIZE, CELL_SIZE))
         frames.append(frame)
     return frames
 
@@ -36,8 +40,7 @@ def _scale_frames(frames, scale):
     ]
 
 
-def _recolor(frames, hue_shift=0, sat_mult=1.0, val_mult=1.0):
-    import colorsys
+def _recolor(frames, hue_shift=0.0, sat_mult=1.0, val_mult=1.0):
     result = []
     for frame in frames:
         img = frame.copy()
@@ -73,43 +76,45 @@ class SpriteSet:
         self._load_sprites()
 
     def _load_sprites(self):
-        try:
-            sheet = Image.open(SPRITE_SHEET).convert("RGBA")
-        except FileNotFoundError:
-            raise SystemExit(f"Sprite sheet not found: {SPRITE_SHEET}")
-
-        idle_raw = _crop_row(sheet, RAT_IDLE_ROW, RAT_FRAMES)
-        walk_raw = _crop_row(sheet, RAT_WALK_ROW, RAT_FRAMES)
-        gesture_raw = _crop_row(sheet, RAT_GESTURE_ROW, RAT_FRAMES)
-
         params = VARIANTS.get(self.variant, VARIANTS["brown"])
 
-        idle_recolored = _recolor(idle_raw, **params)
-        walk_recolored = _recolor(walk_raw, **params)
-        gesture_recolored = _recolor(gesture_raw, **params)
+        for name, frame_count in SPRITE_DEFS.items():
+            path = os.path.join(SPRITE_DIR, f"rat_{name}.png")
+            if not os.path.exists(path):
+                continue
+            sheet = Image.open(path).convert("RGBA")
+            raw = _crop_strip(sheet, frame_count)
+            recolored = _recolor(raw, **params)
+            self._store(name, recolored)
 
-        self._store("idle", idle_recolored)
-        self._store("walk", walk_recolored)
-        self._store("gesture", gesture_recolored)
+        if not hasattr(self, "walk_left"):
+            raise SystemExit("Walk sprites missing — run gen_sprites.py first")
 
-        self.climbing_right = self.walk_right
-        self.climbing_left = self.walk_left
+        for fallback in ["idle", "sit", "jump", "fall", "climb"]:
+            if not hasattr(self, f"{fallback}_left"):
+                setattr(self, f"{fallback}_left", self.walk_left)
+                setattr(self, f"{fallback}_right", self.walk_right)
 
         try:
             run_sheet = Image.open(RUNNING_SHEET).convert("RGBA")
         except FileNotFoundError:
-            raise SystemExit(f"Running sprite sheet not found: {RUNNING_SHEET}")
+            run_sheet = None
 
-        run_raw = []
-        for i in range(RUN_FRAME_COUNT):
-            frame = run_sheet.crop((i * RUN_FRAME_W, 0, (i + 1) * RUN_FRAME_W, RUN_FRAME_H))
-            run_raw.append(frame)
-
-        run_recolored = _recolor(run_raw, **params)
-        self._store("run", run_recolored)
-
-        if not self.walk_right:
-            raise SystemExit("Walk sprites empty — check spritesheet row configuration")
+        if run_sheet:
+            run_raw = []
+            for i in range(RUN_FRAME_COUNT):
+                frame = run_sheet.crop(
+                    (i * RUN_FRAME_W, 0, (i + 1) * RUN_FRAME_W, RUN_FRAME_H)
+                )
+                run_raw.append(frame)
+            run_resized = [
+                f.resize((CELL_SIZE, CELL_SIZE), Image.NEAREST) for f in run_raw
+            ]
+            run_recolored = _recolor(run_resized, **params)
+            self._store("run", run_recolored)
+        else:
+            self.run_left = self.walk_left
+            self.run_right = self.walk_right
 
     def _store(self, name, right_frames_raw):
         right_scaled = _scale_frames(right_frames_raw, self.scale)
@@ -120,7 +125,7 @@ class SpriteSet:
 
     def get_frame(self, state, direction, frame_index):
         key = f"{state}_{direction}"
-        frames = getattr(self, key, self.idle_right)
+        frames = getattr(self, key, self.walk_right)
         return frames[frame_index % len(frames)]
 
     def frame_size(self):

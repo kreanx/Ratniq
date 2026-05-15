@@ -2,7 +2,9 @@
 __pycache__/
 *.pyo
 assets/sprites/raw/
+tools/cosmic-windows/
 x11overlay.py
 overlay.py
 qtoverlay.py
 shelloverlay.py
+cosmic_detector.py
