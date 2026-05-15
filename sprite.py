@@ -36,9 +36,40 @@ def _scale_frames(frames, scale):
     ]
 
 
+def _recolor(frames, hue_shift=0, sat_mult=1.0, val_mult=1.0):
+    import colorsys
+    result = []
+    for frame in frames:
+        img = frame.copy()
+        px = img.load()
+        w, h = img.size
+        for y in range(h):
+            for x in range(w):
+                r, g, b, a = px[x, y]
+                if a == 0:
+                    continue
+                h_, s_, v_ = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+                h_ = (h_ + hue_shift) % 1.0
+                s_ = min(1.0, s_ * sat_mult)
+                v_ = min(1.0, v_ * val_mult)
+                nr, ng, nb = colorsys.hsv_to_rgb(h_, s_, v_)
+                px[x, y] = (int(nr * 255), int(ng * 255), int(nb * 255), a)
+        result.append(img)
+    return result
+
+
+VARIANTS = {
+    "brown": {"hue_shift": 0.0, "sat_mult": 1.0, "val_mult": 1.0},
+    "white": {"hue_shift": 0.0, "sat_mult": 0.05, "val_mult": 1.4},
+    "gray": {"hue_shift": 0.0, "sat_mult": 0.1, "val_mult": 0.7},
+    "dark": {"hue_shift": 0.0, "sat_mult": 0.2, "val_mult": 0.4},
+}
+
+
 class SpriteSet:
-    def __init__(self, scale=2):
+    def __init__(self, scale=2, variant="brown"):
         self.scale = scale
+        self.variant = variant
         self._load_sprites()
 
     def _load_sprites(self):
@@ -51,9 +82,15 @@ class SpriteSet:
         walk_raw = _crop_row(sheet, RAT_WALK_ROW, RAT_FRAMES)
         gesture_raw = _crop_row(sheet, RAT_GESTURE_ROW, RAT_FRAMES)
 
-        self._store("idle", idle_raw)
-        self._store("walk", walk_raw)
-        self._store("gesture", gesture_raw)
+        params = VARIANTS.get(self.variant, VARIANTS["brown"])
+
+        idle_recolored = _recolor(idle_raw, **params)
+        walk_recolored = _recolor(walk_raw, **params)
+        gesture_recolored = _recolor(gesture_raw, **params)
+
+        self._store("idle", idle_recolored)
+        self._store("walk", walk_recolored)
+        self._store("gesture", gesture_recolored)
 
         self.climbing_right = self.walk_right
         self.climbing_left = self.walk_left
@@ -67,7 +104,9 @@ class SpriteSet:
         for i in range(RUN_FRAME_COUNT):
             frame = run_sheet.crop((i * RUN_FRAME_W, 0, (i + 1) * RUN_FRAME_W, RUN_FRAME_H))
             run_raw.append(frame)
-        self._store("run", run_raw)
+
+        run_recolored = _recolor(run_raw, **params)
+        self._store("run", run_recolored)
 
         if not self.walk_right:
             raise SystemExit("Walk sprites empty — check spritesheet row configuration")

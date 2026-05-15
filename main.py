@@ -9,7 +9,7 @@ os.environ["GDK_BACKEND"] = "wayland"
 from gi.repository import GLib
 
 from layeroverlay import LayerOverlay
-from sprite import SpriteSet
+from sprite import SpriteSet, VARIANTS
 from rat import Rat, Surface
 from window_detector import get_walkable_surfaces
 
@@ -27,15 +27,23 @@ class RatniqApp:
     def __init__(self):
         logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 
-        self.sprites = SpriteSet(scale=SPRITE_SCALE)
-        sprite_w, sprite_h = self.sprites.frame_size()
+        variant_names = list(VARIANTS.keys())
+        random.shuffle(variant_names)
+
+        self.rats = []
+        self.sprites_list = []
+        for i in range(RAT_COUNT):
+            variant = variant_names[i % len(variant_names)]
+            sprites = SpriteSet(scale=SPRITE_SCALE, variant=variant)
+            if i == 0:
+                sprite_w, sprite_h = sprites.frame_size()
+            self.sprites_list.append(sprites)
 
         self.overlay = LayerOverlay(sprite_w, sprite_h)
         sw, sh = self.overlay.screen_size
         sh -= DOCK_HEIGHT
 
-        self.rats = []
-        for _ in range(RAT_COUNT):
+        for i in range(RAT_COUNT):
             rat = Rat(0, 0, sw, sh, sprite_w, sprite_h)
             self._randomize_start(rat, sw, sh, sprite_w, sprite_h)
             self.rats.append(rat)
@@ -101,10 +109,10 @@ class RatniqApp:
             self._scan_windows()
 
         rat_data = []
-        for rat in self.rats:
+        for i, rat in enumerate(self.rats):
             rat.update(dt)
             state_name, dir_name = rat.get_frame_key()
-            frame = self.sprites.get_frame(state_name, dir_name, rat.frame_index)
+            frame = self.sprites_list[i].get_frame(state_name, dir_name, rat.frame_index)
             rat_data.append((frame, rat.x, rat.y))
 
         try:
