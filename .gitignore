@@ -1,0 +1,8 @@
+*.pyc
+__pycache__/
+*.pyo
+assets/sprites/raw/
+x11overlay.py
+overlay.py
+qtoverlay.py
+shelloverlay.py
