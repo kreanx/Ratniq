@@ -88,22 +88,9 @@ class SpriteSet:
 
         self._store("sit", _recolor(idle_raw, **params))
         self._store("climb", _recolor(walk_raw, **params))
-
-        jump_raw = []
-        for i in range(RAT_FRAMES):
-            f = walk_raw[i].copy()
-            angle = -15 - (i % 4) * 8
-            f = f.rotate(angle, resample=Image.BICUBIC, expand=False)
-            jump_raw.append(f)
-        self._store("jump", _recolor(jump_raw, **params))
-
-        fall_raw = []
-        for i in range(RAT_FRAMES):
-            f = walk_raw[i].copy()
-            angle = 15 + (i % 4) * 8
-            f = f.rotate(angle, resample=Image.BICUBIC, expand=False)
-            fall_raw.append(f)
-        self._store("fall", _recolor(fall_raw, **params))
+        self._store("jump", _recolor(gesture_raw, **params))
+        self._store("fall", _recolor(gesture_raw, **params))
+        self._store("fall", _recolor(gesture_raw, **params))
 
         try:
             run_sheet = Image.open(RUNNING_SHEET).convert("RGBA")
