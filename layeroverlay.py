@@ -46,11 +46,8 @@ class LayerOverlay:
 
         self._window.connect("draw", self._on_draw)
 
-        self._sprite_surface = None
-        self._rat_x = -sprite_w
-        self._rat_y = -sprite_h
-        self._prev_x = -sprite_w
-        self._prev_y = -sprite_h
+        self._rat_entries = []
+        self._prev_entries = []
 
         self._window.show_all()
 
@@ -108,28 +105,42 @@ class LayerOverlay:
         cr.set_operator(cairo.OPERATOR_SOURCE)
         cr.paint()
 
-        if self._sprite_surface is not None:
-            cr.set_operator(cairo.OPERATOR_OVER)
-            cr.set_source_surface(self._sprite_surface, self._rat_x, self._rat_y)
+        cr.set_operator(cairo.OPERATOR_OVER)
+        for entry in self._rat_entries:
+            surface, x, y = entry
+            cr.set_source_surface(surface, x, y)
             cr.paint()
 
         return True
 
-    def draw_frame(self, pil_image, x, y):
-        ix, iy = int(x), int(y)
-        self._sprite_surface = self._get_surface(pil_image)
-        self._rat_x = ix
-        self._rat_y = iy
+    def draw_rats(self, rat_data):
+        new_entries = []
+        for pil_image, x, y in rat_data:
+            ix, iy = int(x), int(y)
+            surface = self._get_surface(pil_image)
+            new_entries.append((surface, ix, iy))
 
-        old_x, old_y = self._prev_x, self._prev_y
-        self._window.queue_draw_area(
-            min(old_x, ix), min(old_y, iy),
-            self._sprite_w + abs(ix - old_x),
-            self._sprite_h + abs(iy - old_y),
-        )
+        old_entries = self._prev_entries
+        self._rat_entries = new_entries
 
-        self._prev_x = ix
-        self._prev_y = iy
+        regions = []
+        for entries in (old_entries, new_entries):
+            for e in entries:
+                _, ex, ey = e
+                regions.append((ex, ey))
+
+        if regions:
+            min_x = min(r[0] for r in regions)
+            min_y = min(r[1] for r in regions)
+            max_x = max(r[0] for r in regions)
+            max_y = max(r[1] for r in regions)
+            self._window.queue_draw_area(
+                min_x, min_y,
+                self._sprite_w + (max_x - min_x),
+                self._sprite_h + (max_y - min_y),
+            )
+
+        self._prev_entries = list(new_entries)
 
     def poll_events(self):
         pass

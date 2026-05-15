@@ -2,6 +2,7 @@ import os
 import time
 import signal
 import logging
+import random
 
 os.environ["GDK_BACKEND"] = "wayland"
 
@@ -19,6 +20,7 @@ FRAME_DT = 1.0 / FPS
 SPRITE_SCALE = 3
 WINDOW_SCAN_INTERVAL = 3.0
 DOCK_HEIGHT = 0
+RAT_COUNT = 3
 
 
 class RatniqApp:
@@ -32,7 +34,12 @@ class RatniqApp:
         sw, sh = self.overlay.screen_size
         sh -= DOCK_HEIGHT
 
-        self.rat = Rat(0, 0, sw, sh, sprite_w, sprite_h)
+        self.rats = []
+        for _ in range(RAT_COUNT):
+            rat = Rat(0, 0, sw, sh, sprite_w, sprite_h)
+            self._randomize_start(rat, sw, sh, sprite_w, sprite_h)
+            self.rats.append(rat)
+
         self._last_time = time.time()
         self._window_scan_timer = 0.0
         self._screen_w = sw
@@ -45,6 +52,22 @@ class RatniqApp:
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self._quit)
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, self._quit)
         GLib.timeout_add(int(FRAME_DT * 1000), self._tick)
+
+    def _randomize_start(self, rat, sw, sh, sprite_w, sprite_h):
+        ground_y = sh - sprite_h
+        side = random.choice(["left", "right", "screen"])
+        if side == "left":
+            rat.x = -sprite_w
+            rat._target_x = random.uniform(sw * 0.2, sw * 0.6)
+            rat.direction = rat.direction.RIGHT
+        elif side == "right":
+            rat.x = sw + sprite_w
+            rat._target_x = random.uniform(sw * 0.3, sw * 0.8)
+            rat.direction = rat.direction.LEFT
+        else:
+            rat.x = random.uniform(sprite_w, sw - sprite_w)
+            rat._target_x = random.uniform(sprite_w, sw - sprite_w)
+        rat.y = ground_y
 
     def _quit(self, *args):
         self._running = False
@@ -61,7 +84,8 @@ class RatniqApp:
                 surfaces.append(
                     Surface(s["y"], s["x_start"], s["x_end"], "window_top")
                 )
-        self.rat.update_surfaces(surfaces)
+        for rat in self.rats:
+            rat.update_surfaces(surfaces)
 
     def _tick(self):
         if not self._running:
@@ -76,13 +100,15 @@ class RatniqApp:
             self._window_scan_timer = 0.0
             self._scan_windows()
 
-        self.rat.update(dt)
-
-        state_name, dir_name = self.rat.get_frame_key()
-        frame = self.sprites.get_frame(state_name, dir_name, self.rat.frame_index)
+        rat_data = []
+        for rat in self.rats:
+            rat.update(dt)
+            state_name, dir_name = rat.get_frame_key()
+            frame = self.sprites.get_frame(state_name, dir_name, rat.frame_index)
+            rat_data.append((frame, rat.x, rat.y))
 
         try:
-            self.overlay.draw_frame(frame, self.rat.x, self.rat.y)
+            self.overlay.draw_rats(rat_data)
         except Exception as e:
             log.error("Draw error: %s", e)
             self._running = False
