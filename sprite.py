@@ -2,29 +2,27 @@ import os
 import colorsys
 from PIL import Image
 
-SPRITE_DIR = os.path.join(os.path.dirname(__file__), "assets", "sprites", "generated")
-FALLBACK_DIR = os.path.join(os.path.dirname(__file__), "assets", "sprites")
+SPRITE_DIR = os.path.join(os.path.dirname(__file__), "assets", "sprites")
+SPRITE_SHEET = os.path.join(SPRITE_DIR, "rat_bat_spritesheet.png")
+RUNNING_SHEET = os.path.join(SPRITE_DIR, "running_rat_strip.png")
 CELL_SIZE = 32
 
-RUNNING_SHEET = os.path.join(FALLBACK_DIR, "running_rat_strip.png")
+RAT_IDLE_ROW = 0
+RAT_GESTURE_ROW = 1
+RAT_WALK_ROW = 2
+RAT_FRAMES = 10
+
 RUN_FRAME_COUNT = 4
 RUN_FRAME_W = 64
 RUN_FRAME_H = 64
 
-SPRITE_DEFS = {
-    "idle": 4,
-    "walk": 6,
-    "jump": 4,
-    "fall": 4,
-    "climb": 4,
-    "sit": 3,
-}
 
-
-def _crop_strip(img, frame_count):
+def _crop_row(img, row, count):
     frames = []
-    for i in range(frame_count):
-        frame = img.crop((i * CELL_SIZE, 0, (i + 1) * CELL_SIZE, CELL_SIZE))
+    for col in range(count):
+        x0 = col * CELL_SIZE
+        y0 = row * CELL_SIZE
+        frame = img.crop((x0, y0, x0 + CELL_SIZE, y0 + CELL_SIZE))
         frames.append(frame)
     return frames
 
@@ -78,41 +76,47 @@ class SpriteSet:
     def _load_sprites(self):
         params = VARIANTS.get(self.variant, VARIANTS["brown"])
 
-        for name, frame_count in SPRITE_DEFS.items():
-            path = os.path.join(SPRITE_DIR, f"rat_{name}.png")
-            if not os.path.exists(path):
-                continue
-            sheet = Image.open(path).convert("RGBA")
-            raw = _crop_strip(sheet, frame_count)
-            recolored = _recolor(raw, **params)
-            self._store(name, recolored)
+        sheet = Image.open(SPRITE_SHEET).convert("RGBA")
 
-        if not hasattr(self, "walk_left"):
-            raise SystemExit("Walk sprites missing — run gen_sprites.py first")
+        idle_raw = _crop_row(sheet, RAT_IDLE_ROW, RAT_FRAMES)
+        walk_raw = _crop_row(sheet, RAT_WALK_ROW, RAT_FRAMES)
+        gesture_raw = _crop_row(sheet, RAT_GESTURE_ROW, RAT_FRAMES)
 
-        for fallback in ["idle", "sit", "jump", "fall", "climb"]:
-            if not hasattr(self, f"{fallback}_left"):
-                setattr(self, f"{fallback}_left", self.walk_left)
-                setattr(self, f"{fallback}_right", self.walk_right)
+        self._store("idle", _recolor(idle_raw, **params))
+        self._store("walk", _recolor(walk_raw, **params))
+        self._store("gesture", _recolor(gesture_raw, **params))
+
+        self._store("sit", _recolor(idle_raw, **params))
+        self._store("climb", _recolor(walk_raw, **params))
+
+        jump_raw = []
+        for i in range(RAT_FRAMES):
+            f = walk_raw[i].copy()
+            angle = -15 - (i % 4) * 8
+            f = f.rotate(angle, resample=Image.BICUBIC, expand=False)
+            jump_raw.append(f)
+        self._store("jump", _recolor(jump_raw, **params))
+
+        fall_raw = []
+        for i in range(RAT_FRAMES):
+            f = walk_raw[i].copy()
+            angle = 15 + (i % 4) * 8
+            f = f.rotate(angle, resample=Image.BICUBIC, expand=False)
+            fall_raw.append(f)
+        self._store("fall", _recolor(fall_raw, **params))
 
         try:
             run_sheet = Image.open(RUNNING_SHEET).convert("RGBA")
-        except FileNotFoundError:
-            run_sheet = None
-
-        if run_sheet:
             run_raw = []
             for i in range(RUN_FRAME_COUNT):
                 frame = run_sheet.crop(
                     (i * RUN_FRAME_W, 0, (i + 1) * RUN_FRAME_W, RUN_FRAME_H)
                 )
+                frame = frame.resize((CELL_SIZE, CELL_SIZE), Image.NEAREST)
                 run_raw.append(frame)
-            run_resized = [
-                f.resize((CELL_SIZE, CELL_SIZE), Image.NEAREST) for f in run_raw
-            ]
-            run_recolored = _recolor(run_resized, **params)
-            self._store("run", run_recolored)
-        else:
+            run_resized = run_raw * 3
+            self._store("run", _recolor(run_resized, **params))
+        except FileNotFoundError:
             self.run_left = self.walk_left
             self.run_right = self.walk_right
 

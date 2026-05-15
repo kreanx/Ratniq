@@ -20,13 +20,13 @@ class RatDirection(enum.Enum):
 
 
 FRAME_COUNTS = {
-    RatState.IDLE: 4,
-    RatState.SIT: 3,
-    RatState.WALK: 6,
-    RatState.RUN: 6,
-    RatState.JUMP: 4,
-    RatState.FALL: 4,
-    RatState.CLIMB: 4,
+    RatState.IDLE: 10,
+    RatState.SIT: 10,
+    RatState.WALK: 10,
+    RatState.RUN: 12,
+    RatState.JUMP: 10,
+    RatState.FALL: 10,
+    RatState.CLIMB: 10,
 }
 
 
